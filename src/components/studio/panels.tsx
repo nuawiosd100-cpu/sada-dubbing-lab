@@ -661,7 +661,7 @@ export function MixPanel({ settings, onChange }: { settings: JobSettings; onChan
     { label: "Balanced", dub: 100, orig: 35 },
   ];
   return (
-    <Panel step="3" title="Audio mix" hint={`${targetName} is the main voice. Decide how much of the original soundtrack stays underneath.`}>
+    <Panel step="3" title="Audio mix" hint={`${targetName} is the main voice. Cars, rooms, effects and music stay underneath and return after every line.`}>
       <div className="grid grid-cols-2 gap-1 rounded-xl bg-ink-900 p-1 ring-1 ring-ink-700" role="tablist" aria-label="Audio mixing mode">
         <button type="button" role="tab" aria-selected={settings.audioMode !== "stems"} onClick={() => onChange({ audioMode: "classic" })} className={`rounded-lg px-3 py-2 text-xs font-medium transition ${settings.audioMode !== "stems" ? "bg-ink-700 text-ink-100" : "text-ink-400 hover:text-ink-200"}`}>Classic mix</button>
         <button type="button" role="tab" aria-selected={settings.audioMode === "stems"} onClick={preferredStemMode} className={`rounded-lg px-3 py-2 text-xs font-medium transition ${settings.audioMode === "stems" ? "bg-gold-400/15 text-gold-300 ring-1 ring-gold-400/25" : "text-ink-400 hover:text-ink-200"}`}>AI 3-stem cinema mix</button>
@@ -736,7 +736,7 @@ export function MixPanel({ settings, onChange }: { settings: JobSettings; onChan
           onChange={(v) => onChange({ ducking: v })}
           disabled={muted}
           label="Auto-duck original"
-          description="Lowers the original track only while Arabic is speaking; music returns between lines."
+          description="Gently lowers cars, rooms, effects and music only while the dub speaks; the background returns between lines."
         />
         <Toggle
           checked={settings.reduceDialogue}
@@ -747,7 +747,7 @@ export function MixPanel({ settings, onChange }: { settings: JobSettings; onChan
         />
       </div>
       <p className="mt-3 text-[11px] leading-relaxed text-ink-500">
-        The original soundtrack carries speech, music and effects together. Auto-duck and dialogue reduction keep as much music as possible, but only a dedicated stem-separation model can fully isolate music from speech — for a completely clean result choose “Arabic only”.
+        The original soundtrack carries speech, cars, room tone, effects and music together. Auto-duck and dialogue reduction keep the background audible while the new voice speaks; only a dedicated stem-separation model can fully isolate it. The lab defaults to a balanced mix with soft ducking.
       </p>
       </>
       )}

@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, type PointerEvent } from "react";
 import type { DubCue } from "@/lib/types";
-import { fmtDuration, Icon } from "./ui";
+import { fmtDuration, fmtMilliseconds, Icon } from "./ui";
 
 const COLORS = ["#ffbf47", "#57d8c4", "#ff7a70", "#a995ff", "#70a7ff", "#f39bd4"];
 
@@ -72,7 +72,7 @@ export function CinemaPlayer({
           controls
           playsInline
           preload="metadata"
-          className="aspect-video max-h-[68vh] w-full bg-black object-contain"
+          className="aspect-video max-h-[260px] w-full bg-black object-contain"
           onLoadedMetadata={(e) => {
             if (Number.isFinite(e.currentTarget.duration)) setMediaDuration(e.currentTarget.duration);
           }}
@@ -95,7 +95,7 @@ export function CinemaPlayer({
             <span>{fmtDuration(total)}</span>
           </span>
           <span className="hidden font-mono text-[9px] uppercase tracking-[0.18em] text-white/35 sm:block">
-            {cues.length ? `${cues.length} picture-timed Arabic cues` : "Source timeline"}
+            {cues.length ? `${cues.length} millisecond-timed cues` : "Source timeline"}
           </span>
         </div>
 
@@ -128,7 +128,7 @@ export function CinemaPlayer({
                 key={`${cue.start}-${i}`}
                 className="absolute top-[7px] h-[26px] min-w-px rounded-[2px] opacity-75 transition-opacity hover:opacity-100"
                 style={{ left: `calc(${left}% + 2px)`, width: `max(1px, ${width}%)`, backgroundColor: COLORS[speakerIndex % COLORS.length] }}
-                title={`${cue.speaker} · ${fmtDuration(cue.start)}–${fmtDuration(cue.end)}`}
+                title={`${cue.speaker} · ${cue.voice ?? ""} · ${fmtMilliseconds(cue.start)}–${fmtMilliseconds(cue.end)}${cue.offsetMs != null ? ` · ${cue.offsetMs >= 0 ? "+" : ""}${cue.offsetMs} ms` : ""}`}
               />
             );
           })}
@@ -139,10 +139,10 @@ export function CinemaPlayer({
 
         <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-[10px] text-white/40">
           {cues.length > 0 && (
-            <span className="flex items-center gap-1.5"><span className="h-2 w-4 rounded-sm bg-gold-400/80" /> Arabic speech</span>
+            <span className="flex items-center gap-1.5"><span className="h-2 w-4 rounded-sm bg-gold-400/80" /> Dubbed speech</span>
           )}
           <span>Click the timeline to seek · Arrow keys move 5 seconds</span>
-          <span className="ml-auto hidden items-center gap-1.5 sm:flex"><Icon name="film" className="h-3 w-3" /> Audio locked to picture clock</span>
+          <span className="ml-auto hidden items-center gap-1.5 sm:flex"><Icon name="film" className="h-3 w-3" /> Millisecond picture clock</span>
         </div>
       </div>
     </div>

@@ -1,6 +1,7 @@
 // Types shared by the server pipeline and the browser UI.
 
 export type Gender = "male" | "female" | "unknown";
+export type SpeakerAge = "child" | "young" | "adult" | "mature" | "unknown";
 export type DialectId = "msa" | "egyptian" | "levantine" | "gulf";
 
 /** Download quality offered for YouTube imports (height cap in pixels, or "best"). */
@@ -36,6 +37,8 @@ export type Segment = {
 export type Speaker = {
   id: string;
   gender: Gender;
+  /** Apparent age band, used to pick child/young/mature voices. */
+  age?: SpeakerAge;
   description: string;
   genderConfidence?: number;
   genderSource?: "script" | "audio" | "description";
@@ -81,16 +84,19 @@ export type JobSettings = {
 
 export const DEFAULT_SETTINGS: JobSettings = {
   voice: "Orus",
-  voiceList: ["Orus"],
-  castMode: "single",
+  // Balanced starter cast: enough male and female voices (including young-sounding
+  // options) to give every detected speaker their own persona.
+  voiceList: ["Orus", "Kore", "Puck", "Sulafat", "Algenib", "Leda"],
+  castMode: "cast",
   speakerVoices: {},
   dialect: "msa",
   targetLanguage: "ar",
   dubVolume: 100,
-  originalVolume: 15,
+  // Keep cars, rooms, effects and music audible underneath the dub.
+  originalVolume: 35,
   ducking: true,
   clarity: true,
-  reduceDialogue: false,
+  reduceDialogue: true,
   audioMode: "classic",
   separationModel: "mrx",
   dubEnabled: true,
@@ -100,26 +106,35 @@ export const DEFAULT_SETTINGS: JobSettings = {
   dialogueVolume: 80,
   effectsVolume: 100,
   musicVolume: 100,
-  ttsMode: "economy",
+  // One request per line gives the tightest millisecond placement.
+  ttsMode: "precise",
 };
 
 export type CastEntry = {
   speaker: string;
   gender: Gender;
+  age?: SpeakerAge;
   description: string;
   lines: number;
   seconds: number;
   voice: string;
+  /** Presentation detail for the assigned voice card. */
+  persona?: string;
+  flag?: string;
+  tint?: string;
   genderConfidence?: number;
   genderSource?: "script" | "audio" | "description";
 };
 
 export type DubCue = {
-  /** Actual placement in the rendered Arabic track, in seconds. */
+  /** Actual placement in the rendered Arabic track, in seconds (ms precision). */
   start: number;
   end: number;
-  /** Original speech onset detected in the source. */
+  /** Original speech onset/offset detected in the source. */
   sourceStart: number;
+  sourceEnd?: number;
+  /** How far the new line was shifted from its source onset. */
+  offsetMs?: number;
   speaker: string;
   voice: string;
   tempo: number;

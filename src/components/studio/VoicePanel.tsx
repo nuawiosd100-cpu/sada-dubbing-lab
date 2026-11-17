@@ -1,13 +1,13 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { DIALECTS, VOICES, voiceById } from "@/lib/voices";
+import { DIALECTS, VOICES, voiceById, voiceCharacter } from "@/lib/voices";
 import type { JobSettings } from "@/lib/types";
 import { getSessionId } from "./api";
 import { Chip, Icon, Panel, Spinner, btn } from "./ui";
 
 export function VoiceStudioPanel({ settings, onChange }: { settings: JobSettings; onChange: (patch: Partial<JobSettings>) => void }) {
-  const [filter, setFilter] = useState<"all" | "male" | "female">("all");
+  const [filter, setFilter] = useState<"all" | "male" | "female" | "young">("all");
   const [query, setQuery] = useState("");
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const [preview, setPreview] = useState<{ id: string; state: "loading" | "playing" } | null>(null);
@@ -68,6 +68,7 @@ export function VoiceStudioPanel({ settings, onChange }: { settings: JobSettings
   };
 
   const selected = voiceById(focusedId ?? settings.voice) ?? voiceById(settings.voice) ?? VOICES[0];
+  const selectedCh = voiceCharacter(selected.id);
   const single = settings.castMode === "single";
   const castIds = Array.from(new Set([settings.voice, ...(settings.voiceList ?? [])])).filter((id) => !!voiceById(id));
   const isAdded = castIds.includes(selected.id);
@@ -100,9 +101,14 @@ export function VoiceStudioPanel({ settings, onChange }: { settings: JobSettings
 
   const q = query.trim().toLowerCase();
   const shown = VOICES.filter((v) => {
-    if (filter !== "all" && v.gender !== filter) return false;
+    if (filter === "male" || filter === "female") {
+      if (v.gender !== filter) return false;
+    } else if (filter === "young" && !["child", "young"].includes(voiceCharacter(v.id).age)) {
+      return false;
+    }
     if (!q) return true;
-    return `${v.number} ${String(v.number).padStart(2, "0")} ${v.id} ${v.style} ${v.blurb} ${v.gender}`.toLowerCase().includes(q);
+    const ch = voiceCharacter(v.id);
+    return `${v.number} ${String(v.number).padStart(2, "0")} ${v.id} ${v.style} ${v.blurb} ${v.gender} ${ch.persona} ${ch.age} ${ch.flag}`.toLowerCase().includes(q);
   });
   const selectedPreview = preview?.id === selected.id ? preview.state : null;
 
@@ -153,19 +159,24 @@ export function VoiceStudioPanel({ settings, onChange }: { settings: JobSettings
           <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-lg ${!single ? "bg-gold-400 text-ink-950" : "bg-ink-700 text-ink-300"}`}><Icon name="users" /></span>
           <span>
             <span className="block text-sm font-semibold text-ink-100">Smart male / female casting</span>
-            <span className="mt-0.5 block text-xs leading-relaxed text-ink-400">Female speech gets your female voices; male speech gets your male voices.</span>
+            <span className="mt-0.5 block text-xs leading-relaxed text-ink-400">Gender, age and persona are matched — child and teen voices go to child and teen characters.</span>
           </span>
         </button>
       </div>
 
       <div className="mt-4 rounded-xl border border-gold-400/30 bg-gradient-to-br from-gold-400/[0.08] to-transparent p-4">
         <div className="flex flex-wrap items-center gap-3">
-          <span className="grid h-12 w-12 shrink-0 place-items-center rounded-xl bg-gold-400 font-mono text-lg font-bold text-ink-950">
-            {String(selected.number).padStart(2, "0")}
+          <span
+            className="relative grid h-14 w-14 shrink-0 place-items-center rounded-2xl border border-white/10 text-2xl shadow-[0_12px_30px_-14px_rgba(0,0,0,0.9)]"
+            style={{ background: `linear-gradient(145deg, ${selectedCh.tint}42, ${selectedCh.tint}0a)` }}
+          >
+            {selectedCh.flag}
+            <span className="absolute -bottom-1.5 -right-1.5 rounded-md bg-ink-950 px-1.5 py-0.5 font-mono text-[9px] font-bold text-gold-300 ring-1 ring-gold-400/30">#{String(selected.number).padStart(2, "0")}</span>
           </span>
           <div className="min-w-0 flex-1">
             <p className="text-base font-semibold text-ink-100">{selected.id} <span className="text-xs font-medium uppercase tracking-wider text-ink-400">{selected.gender} · {selected.style}</span></p>
-            <p className="mt-0.5 text-xs text-ink-400">{selected.blurb}</p>
+            <p className="mt-0.5 text-xs font-medium capitalize" style={{ color: selectedCh.tint }}>{selectedCh.persona} · {selectedCh.age}</p>
+            <p className="mt-0.5 text-[11px] text-ink-400">{selected.blurb}</p>
           </div>
           <Chip tone={isAdded ? "mint" : "gold"}><Icon name={isAdded ? "check" : "plus"} className="h-3 w-3" />{selected.id === settings.voice ? (single ? "Reads every line" : "Lead voice") : isAdded ? "Added to cast" : "Not added yet"}</Chip>
           <button
@@ -235,6 +246,7 @@ export function VoiceStudioPanel({ settings, onChange }: { settings: JobSettings
                 const lead = id === settings.voice;
                 return (
                   <div key={id} className={`flex items-center gap-1 rounded-lg border py-1 pl-2 pr-1 ${lead ? "border-gold-400/50 bg-gold-400/10" : "border-ink-600 bg-ink-900/70"}`}>
+                    <span title={voiceCharacter(id).persona}>{voiceCharacter(id).flag}</span>
                     <span className="font-mono text-[10px] text-gold-300">#{String(v.number).padStart(2, "0")}</span>
                     <span className="max-w-28 truncate text-xs font-medium text-ink-100">{v.id}</span>
                     {lead ? (
@@ -259,20 +271,20 @@ export function VoiceStudioPanel({ settings, onChange }: { settings: JobSettings
             type="search"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Find a voice by name, style or number…"
+            placeholder="Find by name, persona, age or number…"
             aria-label="Find a voice"
             className="w-full rounded-xl border border-ink-600 bg-ink-900 py-2 pl-9 pr-3 text-xs text-ink-100 placeholder:text-ink-500 focus:border-gold-400 focus:outline-none"
           />
         </div>
         <div className="flex gap-1 self-start rounded-lg bg-ink-900 p-1 ring-1 ring-ink-700">
-          {(["all", "male", "female"] as const).map((f) => (
+          {(["all", "male", "female", "young"] as const).map((f) => (
             <button
               key={f}
               type="button"
               onClick={() => setFilter(f)}
               className={`rounded-md px-3 py-1.5 text-xs font-medium capitalize transition ${filter === f ? "bg-ink-700 text-ink-100" : "text-ink-400 hover:text-ink-200"}`}
             >
-              {f}
+              {f === "young" ? "child / teen" : f}
             </button>
           ))}
         </div>
@@ -281,6 +293,7 @@ export function VoiceStudioPanel({ settings, onChange }: { settings: JobSettings
       <div className="scroll-slim mt-3 grid max-h-[390px] grid-cols-1 gap-2.5 overflow-y-auto pr-1 sm:grid-cols-2 xl:grid-cols-3" role="group" aria-label="Numbered dubbing voices">
         {shown.map((v) => {
           const isSelected = castIds.includes(v.id);
+          const ch = voiceCharacter(v.id);
           const p = preview?.id === v.id ? preview.state : null;
           return (
             <div
@@ -295,12 +308,17 @@ export function VoiceStudioPanel({ settings, onChange }: { settings: JobSettings
                 onClick={() => toggleCard(v.id)}
                 className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg px-1.5 py-1.5 text-left"
               >
-                <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-lg font-mono text-[11px] font-semibold ${isSelected ? "bg-gold-400 text-ink-950" : v.gender === "female" ? "bg-coral-400/15 text-coral-300" : "bg-mint-400/15 text-mint-300"}`}>
-                  {String(v.number).padStart(2, "0")}
+                <span
+                  className="relative grid h-10 w-10 shrink-0 place-items-center rounded-xl border border-white/10 text-lg"
+                  style={{ background: `linear-gradient(145deg, ${ch.tint}3d, ${ch.tint}0b)`, boxShadow: isSelected ? `0 0 0 1px ${ch.tint}66` : undefined }}
+                >
+                  {ch.flag}
+                  <span className={`absolute -bottom-1 -right-1 rounded px-1 font-mono text-[8px] font-bold ${isSelected ? "bg-gold-400 text-ink-950" : "bg-ink-950 text-ink-400"}`}>{String(v.number).padStart(2, "0")}</span>
                 </span>
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-sm font-semibold text-ink-100">{v.id}</span>
-                  <span className="block truncate text-[11px] text-ink-400">{v.gender} · {v.blurb}</span>
+                  <span className="block truncate text-[10px] font-medium capitalize" style={{ color: ch.tint }}>{ch.persona} · {ch.age}</span>
+                  <span className="block truncate text-[10px] text-ink-500">{v.gender} · {v.blurb}</span>
                 </span>
                 <span className={`grid h-6 w-6 shrink-0 place-items-center rounded-md ${isSelected ? "bg-gold-400 text-ink-950" : "bg-ink-700 text-gold-300"}`} title={single ? "Selected" : isSelected ? "Added — click to remove" : "Add to cast"}>
                   <Icon name={isSelected ? "check" : "plus"} className="h-3.5 w-3.5" />

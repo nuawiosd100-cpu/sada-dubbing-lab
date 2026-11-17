@@ -3,7 +3,7 @@
 // Every call can run on a specific key (a visitor's personal key) or on the server's built-in key.
 import crypto from "node:crypto";
 import { abortError, getFfmpeg, run } from "./media";
-import type { Gender, Speaker } from "../types";
+import type { Gender, Speaker, SpeakerAge } from "../types";
 
 const BASE = "https://generativelanguage.googleapis.com/v1beta";
 
@@ -449,6 +449,15 @@ const normGender = (v: unknown): Gender => {
   return s === "male" || s === "female" ? s : "unknown";
 };
 
+const normAge = (v: unknown): SpeakerAge => {
+  const s = String(v ?? "").toLowerCase().replace(/[\s-]+/g, "_");
+  if (s === "child" || s === "kid" || s === "young_child") return "child";
+  if (s === "young" || s === "teen" || s === "teenager" || s === "young_adult") return "young";
+  if (s === "adult") return "adult";
+  if (s === "mature" || s === "older" || s === "senior" || s === "elderly") return "mature";
+  return "unknown";
+};
+
 export async function transcribeChunk(
   audio: Buffer,
   mimeType: string,
@@ -458,7 +467,7 @@ export async function transcribeChunk(
   const known = ctx.knownSpeakers.length
     ? "\nSpeakers already identified earlier in this same video (reuse a label when the voice matches its description; " +
       "create a new label, continuing the numbering, only for a genuinely new voice):\n" +
-      ctx.knownSpeakers.map((s) => `- ${s.id}: ${s.gender}, ${s.description}`).join("\n") +
+      ctx.knownSpeakers.map((s) => `- ${s.id}: ${s.gender}, ${s.age ?? "unknown age"}, ${s.description}`).join("\n") +
       "\n"
     : "";
   const targetName = ctx.targetLanguage === "en" ? "English" : "Arabic";
@@ -473,9 +482,9 @@ Transcribe every spoken utterance and translate it into ${ctx.dialectPrompt}.
 
 Rules:
 - Split speech into short utterances: one sentence or breath group each, ideally 2 to 9 seconds. Never merge two different speakers into one utterance.
-- "start" and "end" are timestamps measured from the beginning of THIS clip, formatted MM:SS.d (minutes, seconds, tenths of a second), for example "01:23.4". Mark exactly where the voice starts and stops; the ${targetName} voice will be placed at these times, so accuracy matters.
+- "start" and "end" are timestamps measured from the beginning of THIS clip, formatted MM:SS.mmm (minutes, seconds, milliseconds), for example "01:23.456". Mark exactly where the voice starts and stops; the ${targetName} voice is placed at these millisecond times, so precision is critical.
 - "speaker" is a stable label for each distinct voice: "S1", "S2", and so on. Tell speakers apart by how their voices sound.
-- In "speakers", list every label you used with its gender ("male", "female" or "unknown") and a short English description of the voice and role (for example "deep-voiced older man, narrator").
+- In "speakers", list every label you used with its gender ("male", "female" or "unknown"), an age band ("child", "young", "adult", "mature" or "unknown") estimated from the voice pitch, and a short English description of the voice and role (for example "young girl, child", "deep-voiced older man, narrator"). The age band decides whether a child/teen or mature voice is used.
 - "text" is the exact wording in the original language.
 - "translation" is a faithful, natural, fluent translation into ${ctx.dialectPrompt}. ${translationRules} Keep it about as long as the original so it can be spoken in the same amount of time. No notes, no brackets, no speaker names.
 - Ignore music, sung lyrics, sound effects, noise and silence. If the clip contains no speech, return empty arrays.
@@ -497,6 +506,7 @@ ${known}`;
               properties: {
                 id: { type: "STRING" },
                 gender: { type: "STRING", enum: ["male", "female", "unknown"] },
+                age: { type: "STRING", enum: ["child", "young", "adult", "mature", "unknown"] },
                 description: { type: "STRING" },
               },
               required: ["id", "gender", "description"],
@@ -534,6 +544,7 @@ ${known}`;
   const speakers: Speaker[] = (Array.isArray(parsed.speakers) ? parsed.speakers : []).map((s: any) => ({
     id: label(s?.id),
     gender: normGender(s?.gender),
+    age: normAge(s?.age),
     description: String(s?.description ?? "").slice(0, 160),
   }));
   const segments: RawSegment[] = [];
@@ -556,7 +567,7 @@ ${known}`;
 
 // --------------------------------------- speaker voice/gender verification ---
 
-export type GenderVote = { gender: Gender; confidence: number };
+export type GenderVote = { gender: Gender; confidence: number; age?: SpeakerAge; ageConfidence?: number };
 
 /**
  * Listen to labelled samples from the source soundtrack and verify the perceived
@@ -575,10 +586,12 @@ export async function verifySpeakerGenders(
   }
   parts.push({
     text:
-      "Listen to every labelled speaker sample above. For each speaker, classify the perceived presentation of the VOICE as male, female, or unknown. " +
+      "Listen to every labelled speaker sample above. For each speaker, classify the perceived presentation of the VOICE as male, female, or unknown, " +
+      "and also estimate its apparent age band as child, young, adult, mature, or unknown. " +
       "Use pitch, timbre and vocal delivery in the actual audio, not the person's name, language, words, or story role. " +
+      "A noticeably high, small voice should be child or young; a deep, seasoned voice should be mature. " +
       "Use unknown only for a genuinely ambiguous voice or a sample without clear speech. Return one result for every supplied speaker id, " +
-      "with confidence from 0 to 1. Do not infer gender from the Arabic translation or from another speaker.",
+      "with confidence from 0 to 1 for both fields. Do not infer gender or age from the Arabic translation or from another speaker.",
   });
   const body = {
     contents: [{ parts }],
@@ -597,6 +610,8 @@ export async function verifySpeakerGenders(
                 id: { type: "STRING" },
                 gender: { type: "STRING", enum: ["male", "female", "unknown"] },
                 confidence: { type: "NUMBER" },
+                age: { type: "STRING", enum: ["child", "young", "adult", "mature", "unknown"] },
+                ageConfidence: { type: "NUMBER" },
               },
               required: ["id", "gender", "confidence"],
             },
@@ -617,7 +632,12 @@ export async function verifySpeakerGenders(
   for (const item of parsed.speakers as any[]) {
     const id = String(item?.id ?? "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
     if (!valid.has(id)) continue;
-    votes.set(id, { gender: normGender(item?.gender), confidence: Math.max(0, Math.min(1, Number(item?.confidence ?? 0))) });
+    votes.set(id, {
+      gender: normGender(item?.gender),
+      confidence: Math.max(0, Math.min(1, Number(item?.confidence ?? 0))),
+      age: normAge(item?.age),
+      ageConfidence: Math.max(0, Math.min(1, Number(item?.ageConfidence ?? item?.confidence ?? 0))),
+    });
   }
   return { votes, model };
 }

@@ -11,7 +11,7 @@ import { GeminiError, detectLanguage, synthesize, transcribeChunk, verifySpeaker
 import { resolveCredentials } from "./keys";
 import { separateCinematicAudio, type StemSet } from "./separation";
 import { exists, ffmpegProgress, ffmpegQuiet, jobDir, outputPath, removeDir, sourcePath, videoDir } from "./media";
-import { VOICES, dialectById, resolveVoice, voiceById } from "../voices";
+import { VOICES, dialectById, resolveVoice, voiceById, voiceCharacter } from "../voices";
 import {
   DEFAULT_SETTINGS,
   type CastEntry,
@@ -20,6 +20,7 @@ import {
   type LogEntry,
   type Segment,
   type Speaker,
+  type SpeakerAge,
   type StageKey,
   type StageState,
 } from "../types";
@@ -67,11 +68,11 @@ export function sanitizeSettings(input: unknown): JobSettings {
     }
   }
   const voice = resolveVoice(i.voice)?.id ?? DEFAULT_SETTINGS.voice;
-  // One voice reads the entire video unless the user explicitly chooses automatic casting.
-  const castMode: JobSettings["castMode"] = i.castMode === "cast" ? "cast" : "single";
+  // The lab defaults to smart casting; single voice is an explicit opt-out.
+  const castMode: JobSettings["castMode"] = i.castMode === "single" ? "single" : DEFAULT_SETTINGS.castMode;
   const added = Array.isArray(i.voiceList)
     ? i.voiceList.map((v) => resolveVoice(v)?.id).filter((v): v is string => !!v)
-    : [];
+    : DEFAULT_SETTINGS.voiceList;
   // Added voices are kept in both modes. Single mode uses only `voice` for speech,
   // but must not discard the user's saved cast when a job is submitted.
   const voiceList = Array.from(new Set([voice, ...added]));
@@ -86,7 +87,7 @@ export function sanitizeSettings(input: unknown): JobSettings {
     originalVolume: pct(i.originalVolume, DEFAULT_SETTINGS.originalVolume),
     ducking: i.ducking !== false,
     clarity: i.clarity !== false,
-    reduceDialogue: i.reduceDialogue === true,
+    reduceDialogue: i.reduceDialogue !== false,
     audioMode: i.audioMode === "stems" ? "stems" : "classic",
     separationModel: i.separationModel === "tiger" ? "tiger" : "mrx",
     dubEnabled: i.dubEnabled !== false,
@@ -96,7 +97,7 @@ export function sanitizeSettings(input: unknown): JobSettings {
     dialogueVolume: pct(i.dialogueVolume, DEFAULT_SETTINGS.dialogueVolume),
     effectsVolume: pct(i.effectsVolume, DEFAULT_SETTINGS.effectsVolume),
     musicVolume: pct(i.musicVolume, DEFAULT_SETTINGS.musicVolume),
-    ttsMode: i.ttsMode === "precise" ? "precise" : "economy",
+    ttsMode: i.ttsMode === "economy" ? "economy" : DEFAULT_SETTINGS.ttsMode,
   };
 }
 
@@ -203,27 +204,34 @@ function planChunks(duration: number, silences: [number, number][]): [number, nu
 
 const translatedText = (s: Segment): string => (s.translation ?? s.arabic ?? "").trim();
 
-/** Sort, clamp and snap utterance starts to the nearest real speech onset. */
+/** Snap to the closest real speech boundary inside a tight millisecond window. */
+const SYNC_WINDOW = 0.1;
+const ms = (s: number) => Math.round(s * 1000) / 1000;
+const nearestBoundary = (value: number, boundaries: number[], window = SYNC_WINDOW): number | null => {
+  let best: number | null = null;
+  let bestDist = window;
+  for (const b of boundaries) {
+    if (b < value - window) continue;
+    if (b > value + window) break;
+    const d = Math.abs(b - value);
+    if (d <= bestDist) {
+      bestDist = d;
+      best = b;
+    }
+  }
+  return best;
+};
+
+/** Sort, clamp and snap utterance boundaries to the real source speech timing. */
 function finalizeSegments(all: Segment[], silences: [number, number][], duration: number): Segment[] {
-  const onsets = silences.map(([, e]) => e).filter((e) => e > 0);
+  const onsets = silences.map(([, e]) => e).filter((e) => e > 0).sort((a, b) => a - b);
+  const offsets = silences.map(([s]) => s).filter((s) => s >= 0).sort((a, b) => a - b);
   const segs = all.filter((s) => translatedText(s)).sort((a, b) => a.start - b.start);
   for (const s of segs) {
-    let best = -1;
-    let bestDist = 0.6;
-    for (const o of onsets) {
-      if (o < s.start - 0.6) continue;
-      if (o > s.start + 0.6) break;
-      const d = Math.abs(o - s.start);
-      if (d < bestDist) {
-        bestDist = d;
-        best = o;
-      }
-    }
-    if (best >= 0) s.start = best;
-    s.start = Math.max(0, Math.min(s.start, Math.max(0, duration - 0.2)));
-    s.end = Math.min(Math.max(s.end, s.start + 0.3), Math.max(duration, s.start + 0.3));
-    s.start = Math.round(s.start * 100) / 100;
-    s.end = Math.round(s.end * 100) / 100;
+    s.start = nearestBoundary(s.start, onsets) ?? s.start;
+    s.end = nearestBoundary(s.end, offsets) ?? s.end;
+    s.start = ms(Math.max(0, Math.min(s.start, Math.max(0, duration - 0.2))));
+    s.end = ms(Math.min(Math.max(s.end, s.start + 0.25), Math.max(duration, s.start + 0.25)));
   }
   return segs;
 }
@@ -237,6 +245,32 @@ export function buildLines(segments: Segment[]): Line[] {
   return segments
     .filter((s) => translatedText(s))
     .map((s, idx) => ({ idx, start: s.start, end: s.end, speaker: s.speaker, text: translatedText(s) }));
+}
+
+/** Infer an age band from the transcript description when the model didn't provide one. */
+function ageFromSpeaker(sp?: Speaker): SpeakerAge {
+  if (sp?.age && sp.age !== "unknown") return sp.age;
+  const d = (sp?.description ?? "").toLowerCase();
+  if (/\b(child|kid|toddler|baby|schoolchild|school boy|school girl|young boy|young girl)\b/.test(d)) return "child";
+  if (/\b(teen|teenager|young|student|college|boy|girl)\b/.test(d)) return "young";
+  if (/\b(old|older|elder|elderly|senior|mature|grandmother|grandfather|grandma|grandpa|wise)\b/.test(d)) return "mature";
+  return "unknown";
+}
+
+/** Rank a voice for a detected character: age fit first, then persona keywords. */
+function personaScore(voice: (typeof VOICES)[number], sp?: Speaker): number {
+  const ch = voiceCharacter(voice.id);
+  const d = (sp?.description ?? "").toLowerCase();
+  let score = 0;
+  for (const keyword of ch.keywords) if (d.includes(keyword)) score += 12;
+  const age = ageFromSpeaker(sp);
+  if (age === "child" && ch.age === "child") score += 100;
+  else if (age === "child" && ch.age === "young") score += 45;
+  else if (age === "young" && ch.age === "young") score += 80;
+  else if (age === "young" && ch.age === "child") score += 35;
+  else if (age === "mature" && ch.age === "mature") score += 75;
+  else if (age === "adult" && ch.age === "adult") score += 18;
+  return score;
 }
 
 export function assignVoices(speakers: Speaker[], lines: Line[], s: JobSettings) {
@@ -260,10 +294,7 @@ export function assignVoices(speakers: Speaker[], lines: Line[], s: JobSettings)
         used.add(chosen);
       }
     }
-  }
-  if (s.castMode === "cast") {
-    // In automatic casting the selected voice really is the lead voice: it goes to the
-    // largest matching speaker, before the remaining speakers are assigned other voices.
+    // The selected lead goes to the largest speaker with a matching gender (or unknown).
     const lead = order.find((id) => {
       if (voiceOf.has(id)) return false;
       const g = info.get(id)?.gender ?? "unknown";
@@ -274,36 +305,59 @@ export function assignVoices(speakers: Speaker[], lines: Line[], s: JobSettings)
       used.add(primary.id);
     }
   }
-  const fixed = new Set([...Object.values(s.speakerVoices), ...used]); // explicit choices + the lead
-  // Automatic casting may only use voices the user added with + (plus explicit speaker choices).
-  const rosterIds = Array.from(new Set([primary.id, ...s.voiceList, ...Object.values(s.speakerVoices)]));
+  const fixed = new Set([...Object.values(s.speakerVoices), ...used]);
+  // Saved voices are tried first. The full studio roster is the safety net: if a saved
+  // cast cannot cover a detected gender or age, fall back instead of mis-casting her.
+  const rosterIds = Array.from(new Set([
+    primary.id,
+    ...s.voiceList,
+    ...Object.values(s.speakerVoices),
+    ...VOICES.map((v) => v.id),
+  ]));
   const roster = rosterIds.map((id) => voiceById(id)).filter((v): v is (typeof VOICES)[number] => !!v);
-  const pools: Record<"male" | "female", string[]> = { male: [], female: [] };
-  for (const v of roster) if (!fixed.has(v.id)) pools[v.gender].push(v.id);
-  const next = { male: 0, female: 0 };
+  const rankedFor = (gender: "male" | "female", sp?: Speaker) =>
+    roster
+      .filter((v) => v.gender === gender && !fixed.has(v.id))
+      .map((v) => ({ v, score: personaScore(v, sp) }))
+      .sort((a, b) => b.score - a.score || a.v.number - b.v.number);
+
   for (const id of order) {
     if (voiceOf.has(id)) continue;
     if (s.castMode === "single") {
       voiceOf.set(id, primary.id);
       continue;
     }
-    const g = info.get(id)?.gender ?? "unknown";
-    const gender = g === "unknown" ? primary.gender : g;
-    const pool = pools[gender];
-    // Unused voices first, the lead voice last. With fewer voices than speakers, they are reused.
-    const pick = pool.length ? pool[next[gender]++ % pool.length] : primary.id;
-    voiceOf.set(id, pick);
+    const sp = info.get(id);
+    const detected = sp?.gender ?? "unknown";
+    const gender = detected === "unknown" ? primary.gender : detected;
+    const ranked = rankedFor(gender, sp);
+    // Prefer a different unused voice; reused voices are the last resort.
+    const pick = ranked.find((x) => !used.has(x.v.id))?.v
+      ?? ranked[0]?.v
+      ?? VOICES.find((v) => v.gender === gender && v.id !== primary.id)
+      ?? primary;
+    voiceOf.set(id, pick.id);
+    used.add(pick.id);
   }
-  const cast: CastEntry[] = order.map((id) => ({
-    speaker: id,
-    gender: info.get(id)?.gender ?? "unknown",
-    description: info.get(id)?.description ?? "",
-    genderConfidence: info.get(id)?.genderConfidence,
-    genderSource: info.get(id)?.genderSource,
-    lines: stats.get(id)!.lines,
-    seconds: Math.round(stats.get(id)!.seconds * 10) / 10,
-    voice: voiceOf.get(id)!,
-  }));
+
+  const cast: CastEntry[] = order.map((id) => {
+    const voice = voiceById(voiceOf.get(id)!) ?? primary;
+    const ch = voiceCharacter(voice.id);
+    return {
+      speaker: id,
+      gender: info.get(id)?.gender ?? "unknown",
+      age: ageFromSpeaker(info.get(id)),
+      description: info.get(id)?.description ?? "",
+      genderConfidence: info.get(id)?.genderConfidence,
+      genderSource: info.get(id)?.genderSource,
+      lines: stats.get(id)!.lines,
+      seconds: Math.round(stats.get(id)!.seconds * 10) / 10,
+      voice: voice.id,
+      persona: ch.persona,
+      flag: ch.flag,
+      tint: ch.tint,
+    };
+  });
   return { voiceOf, cast };
 }
 
@@ -338,7 +392,7 @@ function buildFilterGraph(s: JobSettings, channels: number): string {
   if (s.ducking) {
     g.push(
       "[dub]asplit=2[dubm][sc]",
-      "[orig][sc]sidechaincompress=threshold=0.03:ratio=8:attack=20:release=400[duck]",
+      "[orig][sc]sidechaincompress=threshold=0.06:ratio=4:attack=30:release=180[duck]",
       "[duck][dubm]amix=inputs=2:normalize=0:duration=first[mix]",
     );
   } else {
@@ -346,6 +400,31 @@ function buildFilterGraph(s: JobSettings, channels: number): string {
   }
   g.push("[mix]alimiter=limit=0.95[out]");
   return g.join(";");
+}
+
+/**
+ * When AI separation is unavailable, still honour the 3-stem switches as far as a
+ * single stereo soundtrack allows: keep the retained background layers audible and
+ * cancel the centre-panned original dialogue instead of muting the whole soundtrack.
+ */
+export function classicSettingsFromStems(s: JobSettings): JobSettings {
+  const keepDialogue = s.dialogueEnabled && s.dialogueVolume > 0;
+  const keepBackground =
+    (s.effectsEnabled && s.effectsVolume > 0) || (s.musicEnabled && s.musicVolume > 0);
+  const bgVolume = Math.max(
+    s.effectsEnabled ? s.effectsVolume : 0,
+    s.musicEnabled ? s.musicVolume : 0,
+  );
+  const originalVolume = keepDialogue
+    ? Math.max(s.dialogueVolume, keepBackground ? bgVolume : 0)
+    : keepBackground
+      ? bgVolume
+      : 0;
+  return {
+    ...s,
+    originalVolume,
+    reduceDialogue: !keepDialogue && keepBackground,
+  };
 }
 
 /** Four independently gated channels fed by three real AI-separated source stems. */
@@ -379,7 +458,7 @@ export function buildStemFilterGraph(s: JobSettings): string {
   } else if (s.ducking) {
     g.push(
       "[dub]asplit=2[dubm][sc]",
-      "[orig][sc]sidechaincompress=threshold=0.03:ratio=8:attack=20:release=400[duck]",
+      "[orig][sc]sidechaincompress=threshold=0.06:ratio=4:attack=30:release=180[duck]",
       "[duck][dubm]amix=inputs=2:normalize=0:duration=first[mix]",
       "[mix]alimiter=limit=0.95[out]",
     );
@@ -456,7 +535,15 @@ async function checkSpeakerGenders(
       const vote = votes.get(sp.id);
       if (!vote || vote.gender === "unknown" || vote.confidence < 0.55) return sp;
       if (sp.gender !== "unknown" && sp.gender !== vote.gender) corrected++;
-      return { ...sp, description: reconcileDescription(sp.description, vote.gender), gender: vote.gender, genderConfidence: vote.confidence, genderSource: "audio" as const };
+      const heardAge = vote.age && vote.age !== "unknown" && (vote.ageConfidence ?? 0) >= 0.5 ? vote.age : undefined;
+      return {
+        ...sp,
+        description: reconcileDescription(sp.description, vote.gender),
+        gender: vote.gender,
+        age: heardAge ?? sp.age,
+        genderConfidence: vote.confidence,
+        genderSource: "audio" as const,
+      };
     });
     log(`Speaker voice check: ${votes.size} speaker${votes.size === 1 ? "" : "s"} heard in the source audio${corrected ? ` · ${corrected} gender assignment${corrected === 1 ? "" : "s"} corrected` : ""} · ${model}.`);
     return { speakers: checked, verified: votes.size };
@@ -889,13 +976,14 @@ async function runJob(live: Live): Promise<void> {
       if (signal.aborted) throw new Error("Canceled");
       const line = voiced[i];
       let clip: Buffer = await fsp.readFile(clipPath(line));
-      const start = Math.max(line.start, written / audio.RATE + (i ? 0.08 : 0));
+      // 4 ms safety gap instead of 80 ms, so the new line lands on the source onset.
+      const start = Math.max(line.start, written / audio.RATE + (i ? 0.004 : 0));
       const isLast = i + 1 >= voiced.length;
       // Most lines may borrow the pause before the next line. The last line has a hard limit —
       // the end of the video — so it gets no overrun tolerance and a small safety margin.
       const avail = isLast
-        ? Math.max(duration - start - 0.3, 0.4)
-        : Math.max(voiced[i + 1].start - start - 0.08, line.end - start, 0.4);
+        ? Math.max(duration - start - 0.05, 0.4)
+        : Math.max(voiced[i + 1].start - start - 0.004, line.end - start, 0.4);
       const dur = clip.length / 2 / audio.RATE;
       let tempo = 1;
       if (dur > avail * (isLast ? 1 : 1.03)) {
@@ -915,9 +1003,11 @@ async function runJob(live: Live): Promise<void> {
       await write(clip);
       written = Math.max(written, startSample) + clip.length / 2;
       cues.push({
-        start: Math.round((startSample / audio.RATE) * 1000) / 1000,
-        end: Math.round((written / audio.RATE) * 1000) / 1000,
-        sourceStart: line.start,
+        start: ms(startSample / audio.RATE),
+        end: ms(written / audio.RATE),
+        sourceStart: ms(line.start),
+        sourceEnd: ms(line.end),
+        offsetMs: Math.round((start - line.start) * 1000),
         speaker: line.speaker,
         voice: voiceOf.get(line.speaker) ?? settings.voice,
         tempo: Math.round(tempo * 1000) / 1000,
@@ -926,7 +1016,8 @@ async function runJob(live: Live): Promise<void> {
     }
     await new Promise<void>((res) => ws.end(() => res()));
 
-    const graph = stems ? buildStemFilterGraph(settings) : buildFilterGraph(settings, video.audioChannels ?? 2);
+    const classic = settings.audioMode === "stems" && !stems ? classicSettingsFromStems(settings) : settings;
+    const graph = stems ? buildStemFilterGraph(settings) : buildFilterGraph(classic, video.audioChannels ?? 2);
     const stemInputs = stems ? ["-i", stems.dialogue, "-i", stems.effects, "-i", stems.music] : [];
     const out = outputPath(live.id);
     const tmpOut = path.join(jdir, "output.tmp.mp4");
@@ -962,6 +1053,9 @@ async function runJob(live: Live): Promise<void> {
     const outputSize = (await fsp.stat(out)).size;
 
     const notes: string[] = [];
+    if (settings.audioMode === "stems" && !stems) {
+      notes.push("AI stem separation was unavailable on this server, so the original dialogue was reduced with centre-channel cancellation and the selected background (cars, rooms, effects and music) stayed audible.");
+    }
     if (stretched) notes.push(`${stretched} line${stretched === 1 ? " was" : "s were"} sped up (max ${MAX_TEMPO}×) to fit the original timing.`);
     if (maxLag > 1.5) notes.push(`Dense dialogue: some Arabic lines start up to ${maxLag.toFixed(1)}s after the original line.`);
     if (missing) notes.push(`${missing} line${missing === 1 ? "" : "s"} could not be voiced and stayed silent.`);

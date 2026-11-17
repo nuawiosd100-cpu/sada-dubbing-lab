@@ -64,6 +64,16 @@ export function fmtDuration(sec: number | null | undefined): string {
   return h ? `${h}:${String(m).padStart(2, "0")}:${String(r).padStart(2, "0")}` : `${m}:${String(r).padStart(2, "0")}`;
 }
 
+/** M:SS.mmm — used for picture-locked cue inspection. */
+export function fmtMilliseconds(sec: number | null | undefined): string {
+  if (sec == null || !Number.isFinite(sec)) return "—";
+  const totalMs = Math.max(0, Math.round(sec * 1000));
+  const m = Math.floor(totalMs / 60000);
+  const s = Math.floor((totalMs % 60000) / 1000);
+  const ms = totalMs % 1000;
+  return `${m}:${String(s).padStart(2, "0")}.${String(ms).padStart(3, "0")}`;
+}
+
 export function timeAgo(iso: string): string {
   const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
   if (s < 60) return "just now";

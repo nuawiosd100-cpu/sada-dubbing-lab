@@ -1,6 +1,6 @@
 "use client";
 
-import { VOICES, dialectById, voiceById, voiceNumber } from "@/lib/voices";
+import { VOICES, dialectById, voiceById, voiceCharacter, voiceNumber } from "@/lib/voices";
 import { DEFAULT_SETTINGS, type JobStatus, type JobView, type StageState, type VideoView } from "@/lib/types";
 import { Bar, Chip, Icon, Panel, Spinner, btn, fmtBytes, fmtDuration, timeAgo } from "./ui";
 import { CinemaPlayer } from "./CinemaPlayer";
@@ -200,41 +200,53 @@ export function JobPanel({
           <div className="rounded-xl border border-ink-700 bg-ink-800/50 p-4">
             <div className="mb-3 flex items-center justify-between gap-3">
               <p className="flex items-center gap-2 text-sm font-semibold text-ink-100">
-                <Icon name="users" className="h-4 w-4 text-gold-400" /> Detected speakers &amp; voices
+                <Icon name="users" className="h-4 w-4 text-gold-400" /> Matched cast · voice portraits
               </p>
               <span className="text-[11px] text-ink-500">{job.settings.castMode === "single" ? "single-voice run" : "auto-cast run"}</span>
             </div>
             <ul className="space-y-2">
-              {r.cast.map((c) => (
-                <li key={c.speaker} className="flex flex-wrap items-center gap-3 rounded-lg bg-ink-900/60 p-2.5">
-                  <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-ink-700 font-mono text-[11px] text-ink-200">{c.speaker}</span>
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-xs font-medium text-ink-100">{c.description || "Speaker"}</p>
-                    <p className="text-[11px] capitalize text-ink-400">
-                      <span className={c.gender === "female" ? "text-coral-300" : c.gender === "male" ? "text-mint-300" : "text-ink-400"}>{c.gender}</span>
-                      {c.genderSource === "audio" && c.genderConfidence != null ? ` · heard in source ${Math.round(c.genderConfidence * 100)}%` : c.genderSource === "description" ? " · inferred from description" : ""}
-                      {` · ${c.lines} line${c.lines === 1 ? "" : "s"} · ${fmtDuration(c.seconds)}`}
-                    </p>
-                  </div>
-                  <select
-                    value={castOverrides[c.speaker] ?? (voiceById(c.voice) ? c.voice : DEFAULT_SETTINGS.voice)}
-                    onChange={(e) => onCastChange(c.speaker, e.target.value)}
-                    aria-label={`Voice for ${c.speaker}`}
-                    className="rounded-lg border border-ink-600 bg-ink-900 px-2 py-1.5 text-xs text-ink-100 focus:border-gold-400 focus:outline-none"
-                  >
-                    <optgroup label="Male">
-                      {availableVoices.filter((v) => v.gender === "male").map((v) => (
-                        <option key={v.id} value={v.id}>#{String(v.number).padStart(2, "0")} {v.id} — {v.style}</option>
-                      ))}
-                    </optgroup>
-                    <optgroup label="Female">
-                      {availableVoices.filter((v) => v.gender === "female").map((v) => (
-                        <option key={v.id} value={v.id}>#{String(v.number).padStart(2, "0")} {v.id} — {v.style}</option>
-                      ))}
-                    </optgroup>
-                  </select>
-                </li>
-              ))}
+              {r.cast.map((c) => {
+                const ch = voiceCharacter(c.voice);
+                const chosen = voiceById(c.voice);
+                return (
+                  <li key={c.speaker} className="flex flex-wrap items-center gap-3 rounded-xl border border-ink-700/70 bg-ink-900/60 p-2.5">
+                    <span
+                      className="grid h-11 w-11 shrink-0 place-items-center rounded-xl border border-white/10 text-xl shadow-[0_8px_22px_-12px_rgba(0,0,0,0.9)]"
+                      style={{ background: `linear-gradient(145deg, ${ch.tint}38, ${ch.tint}0c)` }}
+                      title={`${c.speaker} avatar`}
+                    >
+                      {c.flag ?? ch.flag}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-xs font-semibold text-ink-100">{c.description || "Speaker"} <span className="font-mono text-[10px] text-ink-500">{c.speaker}</span></p>
+                      <p className="truncate text-[11px] font-medium" style={{ color: ch.tint }}>{chosen?.id ?? c.voice} · {c.persona ?? ch.persona}</p>
+                      <p className="mt-0.5 text-[10px] capitalize text-ink-400">
+                        <span className={c.gender === "female" ? "text-coral-300" : c.gender === "male" ? "text-mint-300" : "text-ink-400"}>{c.gender}</span>
+                        {c.age && c.age !== "unknown" ? ` · ${c.age}` : ""}
+                        {c.genderSource === "audio" && c.genderConfidence != null ? ` · heard ${Math.round(c.genderConfidence * 100)}%` : ""}
+                        {` · ${c.lines} line${c.lines === 1 ? "" : "s"} · ${fmtDuration(c.seconds)}`}
+                      </p>
+                    </div>
+                    <select
+                      value={castOverrides[c.speaker] ?? (chosen ? c.voice : DEFAULT_SETTINGS.voice)}
+                      onChange={(e) => onCastChange(c.speaker, e.target.value)}
+                      aria-label={`Voice for ${c.speaker}`}
+                      className="rounded-lg border border-ink-600 bg-ink-900 px-2 py-1.5 text-xs text-ink-100 focus:border-gold-400 focus:outline-none"
+                    >
+                      <optgroup label="Male">
+                        {availableVoices.filter((v) => v.gender === "male").map((v) => (
+                          <option key={v.id} value={v.id}>#{String(v.number).padStart(2, "0")} {v.id} — {v.style}</option>
+                        ))}
+                      </optgroup>
+                      <optgroup label="Female">
+                        {availableVoices.filter((v) => v.gender === "female").map((v) => (
+                          <option key={v.id} value={v.id}>#{String(v.number).padStart(2, "0")} {v.id} — {v.style}</option>
+                        ))}
+                      </optgroup>
+                    </select>
+                  </li>
+                );
+              })}
             </ul>
             <button type="button" className={`${btn.ghost} mt-3 w-full`} disabled={!castChanged || busy} onClick={() => onRegenerateCast(job)}>
               <Icon name="refresh" /> Regenerate with these voices

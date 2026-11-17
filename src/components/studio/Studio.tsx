@@ -273,7 +273,7 @@ export default function Studio() {
       <main className="mx-auto max-w-[1500px] px-4 pb-20 pt-8 sm:px-6 lg:px-8">
         <div className="mb-8 flex flex-col justify-between gap-6 lg:flex-row lg:items-end">
           <div className="max-w-3xl">
-            <p className="mb-3 flex items-center gap-2 font-mono text-[10px] font-medium uppercase tracking-[0.24em] text-gold-400"><span className="h-px w-8 bg-gold-400" /> AI Arabic cinema dubbing</p>
+            <p className="mb-3 flex items-center gap-2 font-mono text-[10px] font-medium uppercase tracking-[0.24em] text-gold-400"><span className="h-px w-8 bg-gold-400" /> Sada dubbing lab · cinema sync</p>
             <h1 className="text-balance text-4xl font-semibold leading-[1.08] tracking-[-0.04em] text-ink-100 sm:text-5xl">
               Your film.<br /><span className="bg-gradient-to-r from-gold-300 via-gold-400 to-[#e98c39] bg-clip-text text-transparent">Re-voiced in {settings.targetLanguage === "en" ? "English" : "Arabic"}.</span>
             </h1>
@@ -282,9 +282,9 @@ export default function Studio() {
             </p>
           </div>
           <div className="flex gap-5 border-l border-white/10 pl-5 font-mono text-[9px] uppercase tracking-[0.16em] text-ink-500">
-            <div><span className="mb-1 block text-gold-400">01</span>Audio only</div>
-            <div><span className="mb-1 block text-gold-400">02</span>Original picture</div>
-            <div><span className="mb-1 block text-gold-400">03</span>Timed dialogue</div>
+            <div><span className="mb-1 block text-gold-400">01</span>Matched cast</div>
+            <div><span className="mb-1 block text-gold-400">02</span>Millisecond sync</div>
+            <div><span className="mb-1 block text-gold-400">03</span>Living background</div>
           </div>
         </div>
 
@@ -322,24 +322,7 @@ export default function Studio() {
           )}
         </div>
 
-        <div className="mb-8">
-          <JobPanel
-            featured
-            job={activeJob}
-            video={activeJob ? (videos.find((v) => v.id === activeJob.videoId) ?? activeVideo) : activeVideo}
-            castOverrides={castOverrides}
-            onCastChange={(speaker, v) => setCastOverrides((c) => ({ ...c, [speaker]: v }))}
-            onCancel={(id) => void cancelJob(id)}
-            onResume={(job) => void startJob({ ...job.settings }, job.videoId)}
-            onRegenerateCast={(job) =>
-              void startJob({ ...job.settings, castMode: "cast", speakerVoices: { ...Object.fromEntries((job.result?.cast ?? []).map((c) => [c.speaker, c.voice])), ...castOverrides } }, job.videoId)
-            }
-            onDelete={(id) => void deleteJob(id)}
-            busy={starting || jobRunning}
-          />
-        </div>
-
-        <div id="workflow" className="grid grid-cols-1 items-start gap-6 lg:grid-cols-[minmax(0,1fr)_360px] xl:grid-cols-[minmax(0,1fr)_400px]">
+        <div id="workflow" className="grid grid-cols-1 items-start gap-6 lg:grid-cols-[minmax(0,1fr)_380px] xl:grid-cols-[minmax(0,1fr)_420px]">
           <div className="min-w-0 space-y-6">
             <KeyPanel status={status} onChanged={refreshStatus} />
             <SourcePanel
@@ -375,6 +358,20 @@ export default function Studio() {
           </div>
 
           <div className="scroll-slim min-w-0 space-y-6 lg:sticky lg:top-4 lg:max-h-[calc(100vh-2rem)] lg:overflow-y-auto lg:pr-1">
+            <JobPanel
+              featured
+              job={activeJob}
+              video={activeJob ? (videos.find((v) => v.id === activeJob.videoId) ?? activeVideo) : activeVideo}
+              castOverrides={castOverrides}
+              onCastChange={(speaker, v) => setCastOverrides((c) => ({ ...c, [speaker]: v }))}
+              onCancel={(id) => void cancelJob(id)}
+              onResume={(job) => void startJob({ ...job.settings }, job.videoId)}
+              onRegenerateCast={(job) =>
+                void startJob({ ...job.settings, castMode: "cast", speakerVoices: { ...Object.fromEntries((job.result?.cast ?? []).map((c) => [c.speaker, c.voice])), ...castOverrides } }, job.videoId)
+              }
+              onDelete={(id) => void deleteJob(id)}
+              busy={starting || jobRunning}
+            />
             <HistoryPanel
               jobs={jobs}
               videos={videos}
